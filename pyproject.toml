@@ -15,7 +15,7 @@ dependencies = [
     "fastmcp==3.2.0",
     "plane-sdk @ git+https://github.com/technotenshi/plane-python-sdk@1d3c00a756e86ac4c8ea1bfc0ef70d8719bec872",
     "py-key-value-aio[redis]>=0.4.4,<0.5.0",
-    "mcp==1.28.1",
+    "mcp==1.30.0",
     "PyJWT>=2.13.0",
     "authlib>=1.6.9",
     "boto3>=1.34.0",
