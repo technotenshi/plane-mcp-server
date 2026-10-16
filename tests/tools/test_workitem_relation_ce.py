@@ -28,13 +28,14 @@ class FakeCE:
     def __init__(self) -> None:
         self.rows: list[tuple[str, str]] = []  # (blocked item, blocker), as CE stores them
         self.requests: list[tuple[str, str]] = []
-        self.forced: dict[str, int] = {}  # route -> status for every method
+        self.forced: dict[str, int] = {}  # last path segment -> status, any method
 
     def handle(self, method: str, path: str, body):
         route = path.removeprefix("/api/v1/workspaces/acme/").strip("/")
         self.requests.append((method, route))
-        if route.rsplit("/", 1)[-1] in self.forced:
-            return self.forced[route.rsplit("/", 1)[-1]], {"detail": "forced"}
+        leaf = route.rsplit("/", 1)[-1]
+        if leaf in self.forced:
+            return self.forced[leaf], {"detail": "forced"}
         if path.startswith(ITEM_BASE) and route.endswith("/relations"):
             item = route.split("/")[-2]
             return self._relations(method, item, body)

@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any, Literal, get_args
 
 from fastmcp import FastMCP
-from plane.errors.errors import HttpError
 from plane.models.work_item_relation_definitions import (
     CreateWorkItemRelationDefinition,
     PaginatedWorkItemRelationDefinitionResponse,
@@ -33,6 +32,7 @@ from plane_mcp.toolkit import (
     needs,
     one_of,
     opt,
+    unless_404,
 )
 
 NAME = "workitem_relation"
@@ -86,30 +86,19 @@ LEGACY = {
 
 
 # Custom relations are optional: Community Edition serves none of their endpoints. A 404
-# is reported rather than raised; any other failure still propagates (see `_optional`).
-_NO_CUSTOM_DEFINITIONS = "this Plane server does not expose custom relation definitions"
-_NO_CUSTOM_RELATIONS = "this Plane server does not expose custom relations; only built-in dependencies are shown"
+# is reported rather than raised (see `unless_404`). It cannot tell a missing endpoint from
+# a missing record, so every message says so.
+_DEFINITIONS = "custom relation definitions"
+_RELATIONS = "custom relations"
+_CAVEAT = "answered 404, so this Plane server does not expose it or the record was not found"
 
 
-# A write that answers 404 changed nothing, but a 404 on a definition or work item id is
-# ambiguous with a missing record, so the message says both.
-_UNCONFIRMED_404 = (
-    "Error: the {what} endpoint answered 404, so either this Plane server does not expose it "
-    "or the record was not found. Nothing was changed."
-)
+def _unsupported(what: str) -> str:
+    return f"the {what} endpoint {_CAVEAT}"
 
 
-def _optional(call):
-    """Run a call to an optional endpoint: (True, result), or (False, None) on a 404.
-
-    Any other failure (authentication, server error, timeout) is a real error and propagates.
-    """
-    try:
-        return True, call()
-    except HttpError as error:
-        if error.status_code != 404:
-            raise
-        return False, None
+def _refused(what: str) -> str:
+    return f"Error: {_unsupported(what)}. Nothing was changed."
 
 
 def _all_definitions(client, workspace_slug: str, is_default, is_active) -> list[WorkItemRelationDefinition]:
@@ -169,16 +158,16 @@ def register(mcp: FastMCP) -> None:
 
         if action == "list_definitions":
             result: dict[str, Any] = {"built_in_dependencies": list(DEPENDENCY_TYPES)}
-            found, definitions = _optional(lambda: _all_definitions(client, workspace_slug, is_default, is_active))
+            found, definitions = unless_404(lambda: _all_definitions(client, workspace_slug, is_default, is_active))
             result["custom_definitions"] = [d.model_dump() for d in definitions] if found else []
             if not found:
-                result["unsupported"] = {"custom_definitions": _NO_CUSTOM_DEFINITIONS}
+                result["unsupported"] = {"custom_definitions": _unsupported(_DEFINITIONS)}
             return result
 
         if action == "create_definition":
             if not name:
                 return missing(action, "name")
-            found, created = _optional(
+            found, created = unless_404(
                 lambda: client.work_item_relation_definitions.create(
                     workspace_slug=workspace_slug,
                     data=CreateWorkItemRelationDefinition(
@@ -190,13 +179,13 @@ def register(mcp: FastMCP) -> None:
                     ),
                 )
             )
-            return created if found else _UNCONFIRMED_404.format(what="custom relation definitions")
+            return created if found else _refused(_DEFINITIONS)
 
         if action in ("update_definition", "delete_definition"):
             if not definition_id:
                 return missing(action, "definition_id")
             if action == "update_definition":
-                found, updated = _optional(
+                found, updated = unless_404(
                     lambda: client.work_item_relation_definitions.update(
                         workspace_slug=workspace_slug,
                         definition_id=definition_id,
@@ -209,13 +198,13 @@ def register(mcp: FastMCP) -> None:
                         ),
                     )
                 )
-                return updated if found else _UNCONFIRMED_404.format(what="custom relation definitions")
-            found, _ = _optional(
+                return updated if found else _refused(_DEFINITIONS)
+            found, _ = unless_404(
                 lambda: client.work_item_relation_definitions.delete(
                     workspace_slug=workspace_slug, definition_id=definition_id
                 )
             )
-            return None if found else _UNCONFIRMED_404.format(what="custom relation definitions")
+            return None if found else _refused(_DEFINITIONS)
 
         if error := needs(action, project_id=project_id, workitem_id=workitem_id):
             return error
@@ -224,21 +213,20 @@ def register(mcp: FastMCP) -> None:
             dependencies = client.work_items.dependencies.list(
                 workspace_slug=workspace_slug, project_id=project_id, work_item_id=workitem_id
             )
-            found, custom = _optional(
+            found, custom = unless_404(
                 lambda: client.work_items.custom_relations.list(
                     workspace_slug=workspace_slug, project_id=project_id, work_item_id=workitem_id
                 )
             )
-            if not found:
-                return {
-                    "dependencies": dependencies.model_dump(),
-                    "custom": {},
-                    "unsupported": {"custom_relations": _NO_CUSTOM_RELATIONS},
-                }
-            return {
+            result = {
                 "dependencies": dependencies.model_dump(),
-                "custom": {label: [item.model_dump() for item in items] for label, items in custom.items()},
+                "custom": {label: [item.model_dump() for item in items] for label, items in custom.items()}
+                if found
+                else {},
             }
+            if not found:
+                result["unsupported"] = {"custom_relations": _unsupported(_RELATIONS)}
+            return result
 
         if action == "create":
             targets = coerce_list(workitem_ids)
@@ -257,7 +245,7 @@ def register(mcp: FastMCP) -> None:
                     ),
                 )
             if relation_definition_id and relation_definition_label:
-                found, related = _optional(
+                found, related = unless_404(
                     lambda: client.work_items.custom_relations.create(
                         workspace_slug=workspace_slug,
                         project_id=project_id,
@@ -269,7 +257,7 @@ def register(mcp: FastMCP) -> None:
                         ),
                     )
                 )
-                return related if found else _UNCONFIRMED_404.format(what="custom relations")
+                return related if found else _refused(_RELATIONS)
             return (
                 "Error: provide relation_type for a built-in dependency, or both "
                 "relation_definition_id and relation_definition_label for a custom relation. "
