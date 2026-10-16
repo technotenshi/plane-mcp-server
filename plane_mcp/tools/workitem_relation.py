@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Literal, get_args
 
 from fastmcp import FastMCP
+from plane.errors.errors import HttpError
 from plane.models.work_item_relation_definitions import (
     CreateWorkItemRelationDefinition,
     PaginatedWorkItemRelationDefinitionResponse,
@@ -84,6 +85,17 @@ LEGACY = {
 }
 
 
+# Custom relations are optional: Community Edition serves none of their endpoints. A 404
+# is the server saying the route does not exist, so it is reported rather than raised;
+# any other failure (authentication, server error) is a real error and still propagates.
+_NO_CUSTOM_DEFINITIONS = "this Plane server does not expose custom relation definitions"
+_NO_CUSTOM_RELATIONS = "this Plane server does not expose custom relations; only built-in dependencies are shown"
+
+
+def _route_is_absent(error: HttpError) -> bool:
+    return error.status_code == 404
+
+
 def _all_definitions(client, workspace_slug: str, is_default, is_active) -> list[WorkItemRelationDefinition]:
     """Definitions are a small set an agent must see whole, so page through them."""
     results: list[WorkItemRelationDefinition] = []
@@ -140,12 +152,17 @@ def register(mcp: FastMCP) -> None:
         client, workspace_slug = get_plane_client_context()
 
         if action == "list_definitions":
-            return {
-                "built_in_dependencies": list(DEPENDENCY_TYPES),
-                "custom_definitions": [
+            result: dict[str, Any] = {"built_in_dependencies": list(DEPENDENCY_TYPES)}
+            try:
+                result["custom_definitions"] = [
                     d.model_dump() for d in _all_definitions(client, workspace_slug, is_default, is_active)
-                ],
-            }
+                ]
+            except HttpError as error:
+                if not _route_is_absent(error):
+                    raise
+                result["custom_definitions"] = []
+                result["unsupported"] = {"custom_definitions": _NO_CUSTOM_DEFINITIONS}
+            return result
 
         if action == "create_definition":
             if not name:
@@ -186,9 +203,18 @@ def register(mcp: FastMCP) -> None:
             dependencies = client.work_items.dependencies.list(
                 workspace_slug=workspace_slug, project_id=project_id, work_item_id=workitem_id
             )
-            custom = client.work_items.custom_relations.list(
-                workspace_slug=workspace_slug, project_id=project_id, work_item_id=workitem_id
-            )
+            try:
+                custom = client.work_items.custom_relations.list(
+                    workspace_slug=workspace_slug, project_id=project_id, work_item_id=workitem_id
+                )
+            except HttpError as error:
+                if not _route_is_absent(error):
+                    raise
+                return {
+                    "dependencies": dependencies.model_dump(),
+                    "custom": {},
+                    "unsupported": {"custom_relations": _NO_CUSTOM_RELATIONS},
+                }
             return {
                 "dependencies": dependencies.model_dump(),
                 "custom": {label: [item.model_dump() for item in items] for label, items in custom.items()},
@@ -211,16 +237,25 @@ def register(mcp: FastMCP) -> None:
                     ),
                 )
             if relation_definition_id and relation_definition_label:
-                return client.work_items.custom_relations.create(
-                    workspace_slug=workspace_slug,
-                    project_id=project_id,
-                    work_item_id=workitem_id,
-                    data=CreateWorkItemCustomRelation(
-                        relation_definition_id=relation_definition_id,
-                        relation_definition_type=relation_definition_label,
-                        work_item_ids=targets,
-                    ),
-                )
+                try:
+                    return client.work_items.custom_relations.create(
+                        workspace_slug=workspace_slug,
+                        project_id=project_id,
+                        work_item_id=workitem_id,
+                        data=CreateWorkItemCustomRelation(
+                            relation_definition_id=relation_definition_id,
+                            relation_definition_type=relation_definition_label,
+                            work_item_ids=targets,
+                        ),
+                    )
+                except HttpError as error:
+                    if not _route_is_absent(error):
+                        raise
+                    return (
+                        "Error: the custom relations endpoint answered 404, so either this Plane server "
+                        "does not expose custom relations or the work item was not found. "
+                        "Nothing was created."
+                    )
             return (
                 "Error: provide relation_type for a built-in dependency, or both "
                 "relation_definition_id and relation_definition_label for a custom relation. "
