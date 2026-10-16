@@ -15,6 +15,8 @@ from collections.abc import Sequence
 from html import escape
 from typing import Any
 
+from plane.errors.errors import HttpError
+
 
 def missing(action: str, *names: str) -> str:
     return f"Error: action '{action}' requires: {', '.join(names)}."
@@ -57,6 +59,20 @@ def one_of(name: str, value: Any, allowed: Sequence[str], hint: str = "") -> str
         return None
     message = f"Error: {name} must be one of: {', '.join(allowed)}."
     return f"{message} {hint}" if hint else message
+
+
+def unless_404(call: Any) -> tuple[bool, Any]:
+    """Run a call to an optional endpoint: `(True, result)`, or `(False, None)` on a 404.
+
+    A 404 means the server has no such endpoint (or no such record). Any other failure
+    -- authentication, a server error, a timeout -- is real and propagates.
+    """
+    try:
+        return True, call()
+    except HttpError as error:
+        if error.status_code != 404:
+            raise
+        return False, None
 
 
 def opt(value: Any) -> Any:

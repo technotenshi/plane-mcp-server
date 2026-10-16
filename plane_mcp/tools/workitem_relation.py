@@ -32,6 +32,7 @@ from plane_mcp.toolkit import (
     needs,
     one_of,
     opt,
+    unless_404,
 )
 
 NAME = "workitem_relation"
@@ -82,6 +83,22 @@ LEGACY = {
     "update_work_item_relation_definition": "update_definition",
     "delete_work_item_relation_definition": "delete_definition",
 }
+
+
+# Custom relations are optional: Community Edition serves none of their endpoints. A 404
+# is reported rather than raised (see `unless_404`). It cannot tell a missing endpoint from
+# a missing record, so every message says so.
+_DEFINITIONS = "custom relation definitions"
+_RELATIONS = "custom relations"
+_CAVEAT = "answered 404, so this Plane server does not expose it or the record was not found"
+
+
+def _unsupported(what: str) -> str:
+    return f"the {what} endpoint {_CAVEAT}"
+
+
+def _refused(what: str) -> str:
+    return f"Error: {_unsupported(what)}. Nothing was changed."
 
 
 def _all_definitions(client, workspace_slug: str, is_default, is_active) -> list[WorkItemRelationDefinition]:
@@ -140,44 +157,54 @@ def register(mcp: FastMCP) -> None:
         client, workspace_slug = get_plane_client_context()
 
         if action == "list_definitions":
-            return {
-                "built_in_dependencies": list(DEPENDENCY_TYPES),
-                "custom_definitions": [
-                    d.model_dump() for d in _all_definitions(client, workspace_slug, is_default, is_active)
-                ],
-            }
+            result: dict[str, Any] = {"built_in_dependencies": list(DEPENDENCY_TYPES)}
+            found, definitions = unless_404(lambda: _all_definitions(client, workspace_slug, is_default, is_active))
+            result["custom_definitions"] = [d.model_dump() for d in definitions] if found else []
+            if not found:
+                result["unsupported"] = {"custom_definitions": _unsupported(_DEFINITIONS)}
+            return result
 
         if action == "create_definition":
             if not name:
                 return missing(action, "name")
-            return client.work_item_relation_definitions.create(
-                workspace_slug=workspace_slug,
-                data=CreateWorkItemRelationDefinition(
-                    name=name,
-                    outward=opt(outward),
-                    inward=opt(inward),
-                    is_active=is_active,
-                    color=opt(color),
-                ),
-            )
-
-        if action in ("update_definition", "delete_definition"):
-            if not definition_id:
-                return missing(action, "definition_id")
-            if action == "update_definition":
-                return client.work_item_relation_definitions.update(
+            found, created = unless_404(
+                lambda: client.work_item_relation_definitions.create(
                     workspace_slug=workspace_slug,
-                    definition_id=definition_id,
-                    data=UpdateWorkItemRelationDefinition(
-                        name=opt(name),
+                    data=CreateWorkItemRelationDefinition(
+                        name=name,
                         outward=opt(outward),
                         inward=opt(inward),
                         is_active=is_active,
                         color=opt(color),
                     ),
                 )
-            client.work_item_relation_definitions.delete(workspace_slug=workspace_slug, definition_id=definition_id)
-            return None
+            )
+            return created if found else _refused(_DEFINITIONS)
+
+        if action in ("update_definition", "delete_definition"):
+            if not definition_id:
+                return missing(action, "definition_id")
+            if action == "update_definition":
+                found, updated = unless_404(
+                    lambda: client.work_item_relation_definitions.update(
+                        workspace_slug=workspace_slug,
+                        definition_id=definition_id,
+                        data=UpdateWorkItemRelationDefinition(
+                            name=opt(name),
+                            outward=opt(outward),
+                            inward=opt(inward),
+                            is_active=is_active,
+                            color=opt(color),
+                        ),
+                    )
+                )
+                return updated if found else _refused(_DEFINITIONS)
+            found, _ = unless_404(
+                lambda: client.work_item_relation_definitions.delete(
+                    workspace_slug=workspace_slug, definition_id=definition_id
+                )
+            )
+            return None if found else _refused(_DEFINITIONS)
 
         if error := needs(action, project_id=project_id, workitem_id=workitem_id):
             return error
@@ -186,13 +213,20 @@ def register(mcp: FastMCP) -> None:
             dependencies = client.work_items.dependencies.list(
                 workspace_slug=workspace_slug, project_id=project_id, work_item_id=workitem_id
             )
-            custom = client.work_items.custom_relations.list(
-                workspace_slug=workspace_slug, project_id=project_id, work_item_id=workitem_id
+            found, custom = unless_404(
+                lambda: client.work_items.custom_relations.list(
+                    workspace_slug=workspace_slug, project_id=project_id, work_item_id=workitem_id
+                )
             )
-            return {
+            result = {
                 "dependencies": dependencies.model_dump(),
-                "custom": {label: [item.model_dump() for item in items] for label, items in custom.items()},
+                "custom": {label: [item.model_dump() for item in items] for label, items in custom.items()}
+                if found
+                else {},
             }
+            if not found:
+                result["unsupported"] = {"custom_relations": _unsupported(_RELATIONS)}
+            return result
 
         if action == "create":
             targets = coerce_list(workitem_ids)
@@ -211,16 +245,19 @@ def register(mcp: FastMCP) -> None:
                     ),
                 )
             if relation_definition_id and relation_definition_label:
-                return client.work_items.custom_relations.create(
-                    workspace_slug=workspace_slug,
-                    project_id=project_id,
-                    work_item_id=workitem_id,
-                    data=CreateWorkItemCustomRelation(
-                        relation_definition_id=relation_definition_id,
-                        relation_definition_type=relation_definition_label,
-                        work_item_ids=targets,
-                    ),
+                found, related = unless_404(
+                    lambda: client.work_items.custom_relations.create(
+                        workspace_slug=workspace_slug,
+                        project_id=project_id,
+                        work_item_id=workitem_id,
+                        data=CreateWorkItemCustomRelation(
+                            relation_definition_id=relation_definition_id,
+                            relation_definition_type=relation_definition_label,
+                            work_item_ids=targets,
+                        ),
+                    )
                 )
+                return related if found else _refused(_RELATIONS)
             return (
                 "Error: provide relation_type for a built-in dependency, or both "
                 "relation_definition_id and relation_definition_label for a custom relation. "

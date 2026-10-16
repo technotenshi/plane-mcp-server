@@ -13,7 +13,7 @@ keywords = ["mcp", "plane", "fastmcp", "ai", "automation"]
 
 dependencies = [
     "fastmcp==3.2.0",
-    "plane-sdk==0.3.1",
+    "plane-sdk @ git+https://github.com/technotenshi/plane-python-sdk@c6e8553944f62a04a7e397afdbd0e90a64ef9b19",
     "py-key-value-aio[redis]>=0.4.4,<0.5.0",
     "mcp==1.28.1",
     "PyJWT>=2.13.0",

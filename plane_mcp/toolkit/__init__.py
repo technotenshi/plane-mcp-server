@@ -54,6 +54,7 @@ from plane_mcp.toolkit.runtime import (
     page_params,
     require,
     rich_text,
+    unless_404,
 )
 from plane_mcp.toolkit.spec import (
     Action,
@@ -83,6 +84,7 @@ __all__ = [
     "one_of",
     "opt",
     "rich_text",
+    "unless_404",
     "page_params",
     "plan_gated",
     "project_mention_error",
