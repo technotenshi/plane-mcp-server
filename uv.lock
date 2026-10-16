@@ -923,7 +923,7 @@ requires-dist = [
     { name = "fakeredis", extras = ["lua"], specifier = ">=2.32.1,<2.35.0" },
     { name = "fastmcp", specifier = "==3.2.0" },
     { name = "mcp", specifier = "==1.28.1" },
-    { name = "plane-sdk", git = "https://github.com/technotenshi/plane-python-sdk?rev=c6e8553944f62a04a7e397afdbd0e90a64ef9b19" },
+    { name = "plane-sdk", git = "https://github.com/technotenshi/plane-python-sdk?rev=1d3c00a756e86ac4c8ea1bfc0ef70d8719bec872" },
     { name = "py-key-value-aio", extras = ["redis"], specifier = ">=0.4.4,<0.5.0" },
     { name = "pyjwt", specifier = ">=2.13.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
@@ -934,7 +934,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "plane-sdk"
 version = "0.3.1"
-source = { git = "https://github.com/technotenshi/plane-python-sdk?rev=c6e8553944f62a04a7e397afdbd0e90a64ef9b19#c6e8553944f62a04a7e397afdbd0e90a64ef9b19" }
+source = { git = "https://github.com/technotenshi/plane-python-sdk?rev=1d3c00a756e86ac4c8ea1bfc0ef70d8719bec872#1d3c00a756e86ac4c8ea1bfc0ef70d8719bec872" }
 dependencies = [
     { name = "pydantic" },
     { name = "requests" },
