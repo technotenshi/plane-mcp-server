@@ -73,7 +73,7 @@ def ce(monkeypatch):
             self.end_headers()
             self.wfile.write(data)
 
-        do_GET = do_POST = _answer  # noqa: N815
+        do_GET = do_POST = do_PATCH = do_DELETE = _answer  # noqa: N815
 
         def log_message(self, format, *args):  # noqa: A002
             pass
@@ -107,7 +107,7 @@ def test_list_returns_built_in_dependencies_when_custom_relations_are_missing(re
     assert "custom_relations" in result["unsupported"]
 
 
-def test_list_definitions_reports_custom_definitions_as_unsupported_not_empty(registered, ce):
+def test_list_definitions_marks_custom_definitions_unsupported_alongside_the_empty_list(registered, ce):
     result = _call(registered, action="list_definitions")
 
     assert result["built_in_dependencies"] == list(workitem_relation.DEPENDENCY_TYPES)
@@ -171,5 +171,31 @@ def test_a_failing_relations_route_is_not_reported_as_an_empty_result(registered
 
     with pytest.raises(HttpError) as raised:
         _call(registered, action="list", workitem_id=ITEM_A)
+
+    assert raised.value.status_code == status
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "create_definition", "name": "implements"},
+        {"action": "update_definition", "definition_id": "def-1", "name": "implements"},
+        {"action": "delete_definition", "definition_id": "def-1"},
+    ],
+)
+def test_definition_writes_are_refused_explicitly_when_the_endpoint_is_absent(registered, ce, arguments):
+    result = _call(registered, **arguments)
+
+    assert isinstance(result, str)
+    assert result.startswith("Error:")
+    assert "custom relation definitions" in result
+
+
+@pytest.mark.parametrize("status", [401, 403, 500])
+def test_definition_write_errors_are_not_swallowed(registered, ce, status):
+    ce.forced["work-item-relation-definitions"] = status
+
+    with pytest.raises(HttpError) as raised:
+        _call(registered, action="create_definition", name="implements")
 
     assert raised.value.status_code == status

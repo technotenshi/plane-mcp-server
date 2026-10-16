@@ -86,14 +86,30 @@ LEGACY = {
 
 
 # Custom relations are optional: Community Edition serves none of their endpoints. A 404
-# is the server saying the route does not exist, so it is reported rather than raised;
-# any other failure (authentication, server error) is a real error and still propagates.
+# is reported rather than raised; any other failure still propagates (see `_optional`).
 _NO_CUSTOM_DEFINITIONS = "this Plane server does not expose custom relation definitions"
 _NO_CUSTOM_RELATIONS = "this Plane server does not expose custom relations; only built-in dependencies are shown"
 
 
-def _route_is_absent(error: HttpError) -> bool:
-    return error.status_code == 404
+# A write that answers 404 changed nothing, but a 404 on a definition or work item id is
+# ambiguous with a missing record, so the message says both.
+_UNCONFIRMED_404 = (
+    "Error: the {what} endpoint answered 404, so either this Plane server does not expose it "
+    "or the record was not found. Nothing was changed."
+)
+
+
+def _optional(call):
+    """Run a call to an optional endpoint: (True, result), or (False, None) on a 404.
+
+    Any other failure (authentication, server error, timeout) is a real error and propagates.
+    """
+    try:
+        return True, call()
+    except HttpError as error:
+        if error.status_code != 404:
+            raise
+        return False, None
 
 
 def _all_definitions(client, workspace_slug: str, is_default, is_active) -> list[WorkItemRelationDefinition]:
@@ -153,48 +169,53 @@ def register(mcp: FastMCP) -> None:
 
         if action == "list_definitions":
             result: dict[str, Any] = {"built_in_dependencies": list(DEPENDENCY_TYPES)}
-            try:
-                result["custom_definitions"] = [
-                    d.model_dump() for d in _all_definitions(client, workspace_slug, is_default, is_active)
-                ]
-            except HttpError as error:
-                if not _route_is_absent(error):
-                    raise
-                result["custom_definitions"] = []
+            found, definitions = _optional(lambda: _all_definitions(client, workspace_slug, is_default, is_active))
+            result["custom_definitions"] = [d.model_dump() for d in definitions] if found else []
+            if not found:
                 result["unsupported"] = {"custom_definitions": _NO_CUSTOM_DEFINITIONS}
             return result
 
         if action == "create_definition":
             if not name:
                 return missing(action, "name")
-            return client.work_item_relation_definitions.create(
-                workspace_slug=workspace_slug,
-                data=CreateWorkItemRelationDefinition(
-                    name=name,
-                    outward=opt(outward),
-                    inward=opt(inward),
-                    is_active=is_active,
-                    color=opt(color),
-                ),
-            )
-
-        if action in ("update_definition", "delete_definition"):
-            if not definition_id:
-                return missing(action, "definition_id")
-            if action == "update_definition":
-                return client.work_item_relation_definitions.update(
+            found, created = _optional(
+                lambda: client.work_item_relation_definitions.create(
                     workspace_slug=workspace_slug,
-                    definition_id=definition_id,
-                    data=UpdateWorkItemRelationDefinition(
-                        name=opt(name),
+                    data=CreateWorkItemRelationDefinition(
+                        name=name,
                         outward=opt(outward),
                         inward=opt(inward),
                         is_active=is_active,
                         color=opt(color),
                     ),
                 )
-            client.work_item_relation_definitions.delete(workspace_slug=workspace_slug, definition_id=definition_id)
-            return None
+            )
+            return created if found else _UNCONFIRMED_404.format(what="custom relation definitions")
+
+        if action in ("update_definition", "delete_definition"):
+            if not definition_id:
+                return missing(action, "definition_id")
+            if action == "update_definition":
+                found, updated = _optional(
+                    lambda: client.work_item_relation_definitions.update(
+                        workspace_slug=workspace_slug,
+                        definition_id=definition_id,
+                        data=UpdateWorkItemRelationDefinition(
+                            name=opt(name),
+                            outward=opt(outward),
+                            inward=opt(inward),
+                            is_active=is_active,
+                            color=opt(color),
+                        ),
+                    )
+                )
+                return updated if found else _UNCONFIRMED_404.format(what="custom relation definitions")
+            found, _ = _optional(
+                lambda: client.work_item_relation_definitions.delete(
+                    workspace_slug=workspace_slug, definition_id=definition_id
+                )
+            )
+            return None if found else _UNCONFIRMED_404.format(what="custom relation definitions")
 
         if error := needs(action, project_id=project_id, workitem_id=workitem_id):
             return error
@@ -203,13 +224,12 @@ def register(mcp: FastMCP) -> None:
             dependencies = client.work_items.dependencies.list(
                 workspace_slug=workspace_slug, project_id=project_id, work_item_id=workitem_id
             )
-            try:
-                custom = client.work_items.custom_relations.list(
+            found, custom = _optional(
+                lambda: client.work_items.custom_relations.list(
                     workspace_slug=workspace_slug, project_id=project_id, work_item_id=workitem_id
                 )
-            except HttpError as error:
-                if not _route_is_absent(error):
-                    raise
+            )
+            if not found:
                 return {
                     "dependencies": dependencies.model_dump(),
                     "custom": {},
@@ -237,8 +257,8 @@ def register(mcp: FastMCP) -> None:
                     ),
                 )
             if relation_definition_id and relation_definition_label:
-                try:
-                    return client.work_items.custom_relations.create(
+                found, related = _optional(
+                    lambda: client.work_items.custom_relations.create(
                         workspace_slug=workspace_slug,
                         project_id=project_id,
                         work_item_id=workitem_id,
@@ -248,14 +268,8 @@ def register(mcp: FastMCP) -> None:
                             work_item_ids=targets,
                         ),
                     )
-                except HttpError as error:
-                    if not _route_is_absent(error):
-                        raise
-                    return (
-                        "Error: the custom relations endpoint answered 404, so either this Plane server "
-                        "does not expose custom relations or the work item was not found. "
-                        "Nothing was created."
-                    )
+                )
+                return related if found else _UNCONFIRMED_404.format(what="custom relations")
             return (
                 "Error: provide relation_type for a built-in dependency, or both "
                 "relation_definition_id and relation_definition_label for a custom relation. "
