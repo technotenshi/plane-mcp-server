@@ -12,7 +12,7 @@ authors = [
 keywords = ["mcp", "plane", "fastmcp", "ai", "automation"]
 
 dependencies = [
-    "fastmcp==3.2.0",
+    "fastmcp==3.4.10",
     "plane-sdk @ git+https://github.com/technotenshi/plane-python-sdk@1d3c00a756e86ac4c8ea1bfc0ef70d8719bec872",
     "py-key-value-aio[redis]>=0.4.4,<0.5.0",
     "mcp==1.28.1",
